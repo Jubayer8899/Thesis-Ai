@@ -1,7 +1,7 @@
 import os
 import requests
 import streamlit as st
-import tempfile
+import fitz  # PyMuPDF for fast text extraction
 import pandas as pd
 from io import BytesIO
 from dotenv import load_dotenv
@@ -89,7 +89,7 @@ if not ACTIVE_GEMINI_KEY:
 
 
 # ---------------------------------------------------------
-# Gemini AI Engine & Multimodal File Handler
+# Gemini AI Engine & Fast PDF Text Extraction
 # ---------------------------------------------------------
 def get_gemini_client():
     if not ACTIVE_GEMINI_KEY:
@@ -111,39 +111,23 @@ def ask_gemini(prompt: str) -> str:
         return f"Gemini API error: {error}"
 
 
-def analyze_pdf_with_gemini(uploaded_file, prompt_task: str) -> str:
-    """Uploads PDF file directly to Gemini Files API for multimodal analysis."""
-    client = get_gemini_client()
-    if client is None:
-        return "Gemini API key is missing."
-
+def extract_pdf_text_fast(uploaded_file):
+    """Fast text extraction using PyMuPDF to avoid upload latency."""
     try:
-        # Save Streamlit uploaded file temporarily to disk
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            tmp_path = tmp_file.name
-
-        # Upload file using Gemini Files API
-        with st.spinner("Uploading PDF directly to Gemini (Text + Images)..."):
-            gemini_file = client.files.upload(file=tmp_path)
-
-        # Generate content with file reference
-        with st.spinner("Gemini is analyzing the complete PDF document..."):
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=[gemini_file, prompt_task]
-            )
-
-        # Clean up temp file
-        os.unlink(tmp_path)
-        return response.text or "Gemini returned an empty response."
-
+        pdf_document = fitz.open(stream=uploaded_file.getvalue(), filetype="pdf")
+        page_texts = []
+        for page_number, page in enumerate(pdf_document, start=1):
+            text = page.get_text("text")
+            if text.strip():
+                page_texts.append(f"\n[PAGE {page_number}]\n{text}")
+        pdf_document.close()
+        return "\n".join(page_texts).strip()
     except Exception as error:
-        return f"Document analysis error: {error}"
+        return f"Could not read PDF: {error}"
 
 
 # ---------------------------------------------------------
-# OpenAlex Academic Database API & Helpers
+# OpenAlex Academic Database API & Professor Enrichment
 # ---------------------------------------------------------
 def openalex_get(endpoint: str, params: dict) -> dict:
     request_params = dict(params)
@@ -269,7 +253,7 @@ def convert_df_to_excel(df):
 # Application Interface & Tabs
 # ---------------------------------------------------------
 st.title("📚 Thesis AI Agent")
-st.caption("Gemini-powered research assistant with direct multimodal PDF support.")
+st.caption("Gemini-powered research assistant with fast PDF processing & professor details.")
 
 with st.sidebar:
     st.divider()
@@ -289,50 +273,59 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 
 # ---------------------------------------------------------
-# TAB 1: Paper Reader & Summary (Direct PDF Upload)
+# TAB 1: Paper Reader & Summary (Fast Text Extraction & Formatted TXT)
 # ---------------------------------------------------------
 with tab1:
-    st.header("Research Paper Reader & Multimodal Analyzer")
-    st.write("Upload any PDF (including scanned copies or image-heavy papers). Gemini will read text and images directly!")
+    st.header("Research Paper Reader & Fast Analyzer")
     uploaded_pdf = st.file_uploader("Upload research paper (.pdf)", type=["pdf"], key="paper_pdf")
 
     if uploaded_pdf:
-        st.success("PDF uploaded successfully! Ready for analysis.")
+        with st.spinner("Extracting text rapidly from PDF..."):
+            paper_text = extract_pdf_text_fast(uploaded_pdf)
 
-        analysis_task = st.selectbox(
-            "Choose an analysis task",
-            [
-                "Complete research paper summary",
-                "Research problem, aim, and objectives",
-                "Detailed methodology and equations",
-                "Materials, experimental setup, and figures",
-                "Main findings and numerical results",
-                "Limitations and future research",
-                "Research gap and possible follow-up study",
-                "Explain this paper in simple language"
-            ]
-        )
+        if paper_text.startswith("Could not read"):
+            st.warning(paper_text)
+        else:
+            st.success("PDF text extracted successfully!")
 
-        if st.button("Analyze PDF with Gemini (Multimodal)", type="primary", key="analyze_pdf"):
-            prompt = f"""
-You are an expert academic research assistant in Civil Engineering.
-Analyze the attached research paper thoroughly based on this task: {analysis_task}.
-- Use evidence directly from the paper.
-- Provide clear headings and bullet points.
-"""
-            result = analyze_pdf_with_gemini(uploaded_pdf, prompt)
-            st.session_state.paper_summary_result = result
-
-        if "paper_summary_result" in st.session_state:
-            st.markdown("### 📋 Analysis Result")
-            st.markdown(st.session_state.paper_summary_result)
-            
-            st.download_button(
-                label="📥 Download Research Summary (.txt)",
-                data=st.session_state.paper_summary_result,
-                file_name="paper_summary.txt",
-                mime="text/plain"
+            analysis_task = st.selectbox(
+                "Choose an analysis task",
+                [
+                    "Complete research paper summary",
+                    "Research problem, aim, and objectives",
+                    "Detailed methodology and equations",
+                    "Materials, experimental setup, and variables",
+                    "Main findings and numerical results",
+                    "Limitations and future research",
+                    "Research gap and possible follow-up study",
+                    "Explain this paper in simple language"
+                ]
             )
+
+            if st.button("Analyze PDF with Gemini", type="primary", key="analyze_pdf"):
+                prompt = f"""
+You are an expert academic research assistant in Civil Engineering.
+Analyze the following research paper text thoroughly based on this task: {analysis_task}.
+- Use structured markdown headings, bullet points, and clear formatting so it looks clean and organized.
+- Use evidence directly from the text.
+
+PAPER TEXT:
+{paper_text[:40000]}
+"""
+                with st.spinner("Gemini is analyzing the paper..."):
+                    st.session_state.paper_summary_result = ask_gemini(prompt)
+
+            if "paper_summary_result" in st.session_state:
+                st.markdown("### 📋 Analysis Result")
+                st.markdown(st.session_state.paper_summary_result)
+                
+                # 📥 Clean Formatted Download Button (Preserves readability)
+                st.download_button(
+                    label="📥 Download Research Summary (.txt)",
+                    data=st.session_state.paper_summary_result.encode("utf-8"),
+                    file_name="paper_summary.txt",
+                    mime="text/plain"
+                )
 
 
 # ---------------------------------------------------------
@@ -396,10 +389,12 @@ with tab2:
 
 
 # ---------------------------------------------------------
-# TAB 3: Country-wise Professor / Researcher Excel Export
+# TAB 3: Professor Finder (With University, Research Interest & Profile URL)
 # ---------------------------------------------------------
 with tab3:
     st.header("Find Professors and Researchers by Topic & Country")
+    st.write("Find leading researchers, their institutions, countries, profile links, and research sample papers.")
+    
     professor_topic = st.text_input("Research topic", placeholder="e.g., Physics-informed neural networks", key="prof_topic")
 
     ccol1, ccol2, ccol3 = st.columns(3)
@@ -417,32 +412,51 @@ with tab3:
             st.warning("Enter a research topic.")
         else:
             try:
-                with st.spinner("Searching matching researchers..."):
+                with st.spinner("Searching matching researchers and institutions..."):
                     researchers, total_works = find_researchers(
                         professor_topic.strip(), int(researcher_year_from), int(researcher_year_to), int(researcher_limit), country_filter.strip()
                     )
 
-                st.success(f"Identified {len(researchers)} researchers.")
+                st.success(f"Identified {len(researchers)} researchers matching your criteria.")
 
                 if researchers:
                     excel_res_rows = []
                     for index, researcher in enumerate(researchers[:30], start=1):
+                        sample_titles = ", ".join([p["title"] for p in researcher["sample_papers"][:3]])
+                        
                         excel_res_rows.append({
-                            "Name": researcher["name"], "Institutions": researcher["institutions"],
-                            "Countries": researcher["countries"], "Matching Papers Count": researcher["works_found"],
-                            "Total Citations": researcher["citations_in_results"], "Profile URL": researcher["id"],
+                            "Professor Name": researcher["name"],
+                            "University / Institution": researcher["institutions"],
+                            "Country": researcher["countries"],
+                            "Matching Papers Count": researcher["works_found"],
+                            "Total Citations": researcher["citations_in_results"],
+                            "Sample Research Topics / Focus": sample_titles,
+                            "OpenAlex Profile URL": researcher["id"],
                             "ORCID": researcher.get("orcid", "N/A")
                         })
 
-                        with st.expander(f"{index}. {researcher['name']} — {researcher['institutions']} ({researcher['countries']})"):
-                            st.write(f"**Matching Papers:** {researcher['works_found']}")
-                            st.write(f"**Total Citations:** {researcher['citations_in_results']}")
-                            st.markdown(f"[Open Profile]({researcher['id']})")
+                        with st.expander(f"{index}. {researcher['name']} — 🏛️ {researcher['institutions']} ({researcher['countries']})"):
+                            st.write(f"**University / Institution(s):** {researcher['institutions']}")
+                            st.write(f"**Country:** {researcher['countries']}")
+                            st.write(f"**Matching Papers Count:** {researcher['works_found']}")
+                            st.write(f"**Total Citations in Search:** {researcher['citations_in_results']}")
+                            st.markdown(f"🔗 **OpenAlex Profile Link:** [View Profile]({researcher['id']})")
+                            if researcher.get("orcid"):
+                                st.markdown(f"🆔 **ORCID ID:** [{researcher['orcid']}]({researcher['orcid']})")
+
+                            st.markdown("📚 **Sample Publications / Research Focus:**")
+                            for sample in researcher["sample_papers"]:
+                                paper_label = f"{sample['title']} ({sample['year']})" if sample['year'] else sample['title']
+                                if sample["url"]:
+                                    st.markdown(f"- [{paper_label}]({sample['url']})")
+                                else:
+                                    st.markdown(f"- {paper_label}")
 
                     df_researchers = pd.DataFrame(excel_res_rows)
                     excel_res_data = convert_df_to_excel(df_researchers)
+                    
                     st.download_button(
-                        label="📥 Download Professor List as Excel (.xlsx)",
+                        label="📥 Download Detailed Professor List as Excel (.xlsx)",
                         data=excel_res_data,
                         file_name=f"professors_{professor_topic[:15].strip()}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -463,7 +477,7 @@ with tab4:
             with st.spinner("Gemini is preparing your answer..."):
                 res = ask_gemini(assistant_question)
                 st.markdown(res)
-                st.download_button("📥 Download Answer (.txt)", data=res, file_name="ai_response.txt")
+                st.download_button("📥 Download Answer (.txt)", data=res.encode("utf-8"), file_name="ai_response.txt", mime="text/plain")
 
 
 # ---------------------------------------------------------
@@ -479,11 +493,11 @@ with tab5:
             with st.spinner("Generating document..."):
                 doc_res = ask_gemini(f"Draft a {doc_type} based on: {details}")
                 st.markdown(doc_res)
-                st.download_button("📥 Download Document (.txt)", data=doc_res, file_name="generated_document.txt")
+                st.download_button("📥 Download Document (.txt)", data=doc_res.encode("utf-8"), file_name="generated_document.txt", mime="text/plain")
 
 
 # ---------------------------------------------------------
 # Footer
 # ---------------------------------------------------------
 st.divider()
-st.caption("Thesis AI Agent | Powered by Streamlit & Gemini 3.8 Flash (Multimodal)")
+st.caption("Thesis AI Agent | Powered by Streamlit & Gemini 3.8 Flash")
