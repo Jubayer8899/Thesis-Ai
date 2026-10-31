@@ -428,27 +428,26 @@ PAPER TEXT:
                     st.session_state.paper_summary_result = ask_gemini(prompt)
 
             # TAB 1 - Analysis Result Render & PDF Download Buttons
-           if "paper_summary_result" in st.session_state:
-    st.markdown("### 📋 Formatted Analysis Result")
-    st.markdown(st.session_state.paper_summary_result)
+            if "paper_summary_result" in st.session_state:
+                st.markdown("### 📋 Formatted Analysis Result")
+                st.markdown(st.session_state.paper_summary_result)
 
-    col1, col2 = st.columns(2)
-    with col1:
+                col1, col2 = st.columns(2)
+                with col1:
         # Structured HTML (Opens in browser -> Ctrl+P -> Save as PDF with clean tables & headings)
-        html_content = generate_styled_pdf_html(st.session_state.paper_summary_result)
-        st.download_button(
-            label="📥 Download Structured Report (.html / Save as PDF)",
-            data=html_content.encode("utf-8"),
-            file_name="paper_summary_report.html",
-            mime="text/html"
-        )
-    with col2:
-        st.download_button(
-            label="📥 Download Plain Text (.txt)",
-            data=st.session_state.paper_summary_result.encode("utf-8"),
-            file_name="paper_summary.txt",
-            mime="text/plain"
-        )
+                    html_content = generate_styled_pdf_html(st.session_state.paper_summary_result)
+                    st.download_button(
+                        label="📥 Download Structured Report (.html / Save as PDF)",
+                        data=html_content.encode("utf-8"),
+                        file_name="paper_summary_report.html",
+                        mime="text/html"
+                                        )
+                with col2:
+                    st.download_button(
+                        label="📥 Download Plain Text (.txt)",
+                        data=st.session_state.paper_summary_result.encode("utf-8"),
+                        file_name="paper_summary.txt",
+                        mime="text/plain"
 
 
 # ---------------------------------------------------------
