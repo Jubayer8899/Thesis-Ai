@@ -15,10 +15,12 @@ load_dotenv()
 
 # Streamlit secrets or .env configurations
 DEFAULT_GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", "")).strip()
+
+# ⚠️ Updated model to gemini-3.8-flash as required by API
 GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.8-flash")).strip()
 OPENALEX_API_KEY = st.secrets.get("OPENALEX_API_KEY", os.getenv("OPENALEX_API_KEY", "")).strip()
 
-# Password Configuration (Secrets/Env support)
+# Password Configuration
 APP_PASSWORD = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", "coder123"))          # General Users
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", os.getenv("ADMIN_PASSWORD", "myadmin789"))  # Admin User (You)
 
@@ -58,7 +60,7 @@ def check_password():
     return True
 
 if not check_password():
-    st.stop()  # Stop app execution if not authenticated
+    st.stop()
 
 
 # ---------------------------------------------------------
@@ -68,13 +70,11 @@ with st.sidebar:
     st.header("🔑 API Configuration")
     
     if st.session_state.is_admin:
-        # Admin Mode: Uses secret key automatically
         ACTIVE_GEMINI_KEY = DEFAULT_GEMINI_KEY
         st.success("👑 Admin Mode Active: Secret API Key Auto-Loaded!")
         if not ACTIVE_GEMINI_KEY:
             st.warning("⚠️ Admin Warning: Default GEMINI_API_KEY is not set in secrets/env.")
     else:
-        # General User Mode: Mandatory custom API key input
         user_api_key_input = st.text_input(
             "Enter your Gemini API Key", 
             type="password",
@@ -89,17 +89,15 @@ with st.sidebar:
             ACTIVE_GEMINI_KEY = None
             st.warning("⚠️ Please enter your Gemini API key to unlock features.")
 
-# Block execution if no valid API key is present
 if not ACTIVE_GEMINI_KEY:
     st.warning("🔒 Access Blocked: Gemini API Key is required to use this application.")
     st.stop()
 
 
 # ---------------------------------------------------------
-# Gemini AI Engine (Uses ACTIVE_GEMINI_KEY)
+# Gemini AI Engine (Uses ACTIVE_GEMINI_KEY & gemini-3.8-flash)
 # ---------------------------------------------------------
 def get_gemini_client():
-    """Initializes Google GenAI Client with active dynamic API key."""
     if not ACTIVE_GEMINI_KEY:
         return None
     return genai.Client(api_key=ACTIVE_GEMINI_KEY)
@@ -123,10 +121,9 @@ def ask_gemini(prompt: str) -> str:
 
 
 # ---------------------------------------------------------
-# OpenAlex Academic Database API
+# OpenAlex Academic Database API & Helpers
 # ---------------------------------------------------------
 def openalex_get(endpoint: str, params: dict) -> dict:
-    """Request data from OpenAlex API."""
     request_params = dict(params)
     if OPENALEX_API_KEY:
         request_params["api_key"] = OPENALEX_API_KEY
@@ -145,7 +142,6 @@ def openalex_get(endpoint: str, params: dict) -> dict:
 
 
 def reconstruct_abstract(inverted_index):
-    """Convert OpenAlex abstract inverted index into readable text."""
     if not inverted_index:
         return "Abstract not available in OpenAlex."
 
@@ -159,7 +155,6 @@ def reconstruct_abstract(inverted_index):
 
 
 def get_author_names(work):
-    """Helper to join author names from paper object."""
     names = []
     for authorship in work.get("authorships", []) or []:
         author = authorship.get("author") or {}
@@ -171,7 +166,6 @@ def get_author_names(work):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_papers(topic: str, year_from: int, year_to: int, limit: int):
-    """Search papers via OpenAlex."""
     params = {
         "search": topic,
         "per_page": limit,
@@ -187,7 +181,6 @@ def search_papers(topic: str, year_from: int, year_to: int, limit: int):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def find_researchers(topic: str, year_from: int, year_to: int, limit: int, country_code: str = ""):
-    """Aggregate researcher profiles by topic & optional country code."""
     params = {
         "search": topic,
         "per_page": limit,
@@ -277,10 +270,9 @@ def find_researchers(topic: str, year_from: int, year_to: int, limit: int, count
 
 
 # ---------------------------------------------------------
-# PDF Processing (PyMuPDF)
+# PDF Processing & Export Helpers
 # ---------------------------------------------------------
 def extract_pdf_text(uploaded_file):
-    """Extract text from uploaded PDF using PyMuPDF."""
     try:
         pdf_document = fitz.open(
             stream=uploaded_file.getvalue(),
@@ -294,19 +286,15 @@ def extract_pdf_text(uploaded_file):
                 page_texts.append(f"\n[PAGE {page_number}]\n{text}")
 
         pdf_document.close()
-
         extracted_text = "\n".join(page_texts).strip()
         if not extracted_text:
             return "No selectable text was found. This may be a scanned PDF; OCR will be needed."
-
         return extracted_text
-
     except Exception as error:
         return f"Could not read this PDF: {error}"
 
 
 def build_paper_prompt(task: str, paper_text: str) -> str:
-    """Build formatted prompt for paper analysis."""
     return f"""
 You are an academic research assistant specializing in Civil Engineering.
 
@@ -326,77 +314,58 @@ PAPER TEXT:
 
 
 def convert_df_to_excel(df):
-    """Helper to convert Pandas DataFrame to Excel downloadable stream."""
+    """Encodes DataFrame into Excel Bytes for Streamlit Download Button."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Sheet1')
+        df.to_excel(writer, index=False, sheet_name='Data_Export')
     return output.getvalue()
 
 
 # ---------------------------------------------------------
-# Application Interface & Sidebar System Info
+# Main App & Sidebar Info
 # ---------------------------------------------------------
 st.title("📚 Thesis AI Agent")
-st.caption(
-    "Gemini-powered research assistant for Civil Engineering, "
-    "academic papers, literature review, researcher discovery, and application docs."
-)
+st.caption("Gemini-powered research assistant for Civil Engineering, academic papers, & researcher discovery.")
 
 with st.sidebar:
     st.divider()
-    st.header("⚙️ Configuration")
+    st.header("⚙️ System Status")
     st.write(f"**Gemini Model:** `{GEMINI_MODEL}`")
     st.write(
-        "**Gemini Connection:** " +
-        ("🟢 Active" if ACTIVE_GEMINI_KEY else "🔴 Missing Key")
+        "**Gemini Status:** " +
+        ("🟢 Active" if ACTIVE_GEMINI_KEY else "🔴 Key Missing")
     )
     st.write(
         "**OpenAlex API:** " +
-        ("🟢 API Key Detected" if OPENALEX_API_KEY else "⚪ Public Mode (Limited Rate)")
+        ("🟢 Connected" if OPENALEX_API_KEY else "⚪ Public Mode")
     )
     st.divider()
-    st.markdown("**Research Workflow**")
-    st.markdown(
-        "1. Search your research topic.\n"
-        "2. Review papers & find gaps.\n"
-        "3. Find professors country-wise.\n"
-        "4. Read and analyze PDFs.\n"
-        "5. Generate Cover Letters & Proposals."
-    )
-    st.caption(
-        "Always verify paper details, author roles, affiliations, "
-        "and research claims from original sources."
-    )
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📄 Paper Reader & Gap Finder",
-    "🔎 Paper Search & Export",
+    "📄 Paper Reader & Summary",
+    "🔎 Search & Export Papers",
     "👨‍🏫 Professor Finder",
     "🤖 Gemini Assistant",
-    "📝 Application & Proposal Gen"
+    "📝 Application Generator"
 ])
 
 
 # ---------------------------------------------------------
-# TAB 1: Paper Reader & Gap Finder
+# TAB 1: Paper Reader & Gap Finder (With Download Option)
 # ---------------------------------------------------------
 with tab1:
     st.header("Research Paper Reader & Gap Analyzer")
-    uploaded_pdf = st.file_uploader(
-        "Upload a research paper (PDF)",
-        type=["pdf"],
-        key="paper_pdf"
-    )
+    uploaded_pdf = st.file_uploader("Upload a research paper (PDF)", type=["pdf"], key="paper_pdf")
 
     if uploaded_pdf:
-        with st.spinner("Extracting PDF text..."):
+        with st.spinner("Extracting text from PDF..."):
             paper_text = extract_pdf_text(uploaded_pdf)
 
         if paper_text.startswith("Could not read") or paper_text.startswith("No selectable"):
             st.warning(paper_text)
         else:
             st.success("PDF text extracted successfully.")
-            with st.expander("Preview extracted text"):
+            with st.expander("Preview Extracted Text"):
                 st.text(paper_text[:12000])
 
             analysis_task = st.selectbox(
@@ -416,101 +385,83 @@ with tab1:
             if st.button("Analyze Paper with Gemini", key="analyze_pdf"):
                 prompt = build_paper_prompt(analysis_task, paper_text)
                 with st.spinner("Gemini is analyzing the paper..."):
-                    result = ask_gemini(prompt)
-                st.markdown(result)
+                    st.session_state.paper_summary_result = ask_gemini(prompt)
+
+            # Show Result & Add Download Option
+            if "paper_summary_result" in st.session_state:
+                st.markdown("### 📋 Analysis Result")
+                st.markdown(st.session_state.paper_summary_result)
+                
+                # 📥 Download Summary Button
+                st.download_button(
+                    label="📥 Download Research Summary (.txt)",
+                    data=st.session_state.paper_summary_result,
+                    file_name="paper_summary.txt",
+                    mime="text/plain"
+                )
 
             st.divider()
             st.subheader("Ask a question about this paper")
-            question = st.text_input(
-                "Your question",
-                placeholder="Example: What was the water-cement ratio?"
-            )
+            question = st.text_input("Your question", placeholder="Example: What was the water-cement ratio?")
 
             if st.button("Ask About This PDF", key="ask_pdf"):
                 if not question.strip():
                     st.warning("Please write a question first.")
                 else:
                     prompt = build_paper_prompt(
-                        f"Answer this question using the paper. "
-                        f"Where possible, identify the relevant page number. "
-                        f"Question: {question}",
+                        f"Answer this question using the paper. Question: {question}",
                         paper_text
                     )
-                    with st.spinner("Finding the answer..."):
-                        answer = ask_gemini(prompt)
-                    st.markdown(answer)
+                    with st.spinner("Finding answer..."):
+                        ans = ask_gemini(prompt)
+                        st.markdown(ans)
+                        st.download_button("📥 Download Answer (.txt)", data=ans, file_name="pdf_answer.txt")
 
 
 # ---------------------------------------------------------
-# TAB 2: Topic-wise Paper Search & Export
+# TAB 2: Topic-wise Paper Search & Excel Export
 # ---------------------------------------------------------
 with tab2:
     st.header("Topic-wise Academic Paper Search & Data Export")
-    st.write("Search research publications by topic using OpenAlex and export to Excel.")
-
-    paper_topic = st.text_input(
-        "Research topic",
-        placeholder="Example: Machine learning prediction of concrete compressive strength",
-        key="paper_topic"
-    )
+    paper_topic = st.text_input("Research topic", placeholder="Example: Machine learning concrete strength", key="paper_topic")
 
     pcol1, pcol2, pcol3 = st.columns(3)
     with pcol1:
-        paper_year_from = st.number_input(
-            "From year", min_value=1900, max_value=2100,
-            value=2018, step=1, key="paper_from"
-        )
+        paper_year_from = st.number_input("From year", min_value=1900, max_value=2100, value=2018, key="paper_from")
     with pcol2:
-        paper_year_to = st.number_input(
-            "To year", min_value=1900, max_value=2100,
-            value=2026, step=1, key="paper_to"
-        )
+        paper_year_to = st.number_input("To year", min_value=1900, max_value=2100, value=2026, key="paper_to")
     with pcol3:
-        paper_limit = st.selectbox(
-            "Maximum results", [10, 25, 50, 100], index=1,
-            key="paper_limit"
-        )
+        paper_limit = st.selectbox("Maximum results", [10, 25, 50, 100], index=1, key="paper_limit")
 
     if st.button("Search Research Papers", type="primary", key="search_papers"):
         if not paper_topic.strip():
             st.warning("Enter a research topic.")
-        elif paper_year_from > paper_year_to:
-            st.warning("The starting year must not be later than the ending year.")
         else:
             try:
-                with st.spinner("Searching OpenAlex..."):
+                with st.spinner("Searching OpenAlex database..."):
                     papers, total_count = search_papers(
-                        paper_topic.strip(),
-                        int(paper_year_from),
-                        int(paper_year_to),
-                        int(paper_limit)
+                        paper_topic.strip(), int(paper_year_from), int(paper_year_to), int(paper_limit)
                     )
 
-                st.success(
-                    f"Found {len(papers)} results in this search. "
-                    f"OpenAlex reports approximately {total_count:,} matching records."
-                )
+                st.success(f"Found {len(papers)} results. Total records: {total_count:,}")
 
-                if not papers:
-                    st.info("No papers found. Try broader or different keywords.")
-                else:
+                if papers:
                     excel_rows = []
                     for index, paper in enumerate(papers, start=1):
                         title = paper.get("title") or "Title unavailable"
-                        year = paper.get("publication_year") or "Year unavailable"
-                        doi = paper.get("doi")
+                        year = paper.get("publication_year") or "N/A"
+                        doi = paper.get("doi") or "N/A"
                         cited = paper.get("cited_by_count", 0)
                         authors = get_author_names(paper)
                         abstract = reconstruct_abstract(paper.get("abstract_inverted_index"))
-                        landing_page = ((paper.get("primary_location") or {}).get("landing_page_url"))
-                        paper_url = doi or landing_page or paper.get("id")
+                        paper_url = doi if doi != "N/A" else paper.get("id")
 
                         excel_rows.append({
                             "Title": title,
                             "Year": year,
                             "Authors": authors,
                             "Citations": cited,
-                            "DOI": doi or "N/A",
+                            "DOI": doi,
                             "URL": paper_url,
                             "Abstract": abstract[:1000]
                         })
@@ -518,126 +469,79 @@ with tab2:
                         with st.expander(f"{index}. {title} ({year})"):
                             st.write(f"**Authors:** {authors}")
                             st.write(f"**Citations:** {cited}")
-                            st.write(f"**DOI:** {doi or 'Not available'}")
-                            st.write(f"**Abstract:** {abstract[:2500]}")
-                            if paper_url:
-                                st.markdown(f"[Open paper / record]({paper_url})")
+                            st.write(f"**Abstract:** {abstract[:1500]}")
 
+                    # Generate Excel Download
                     df_papers = pd.DataFrame(excel_rows)
                     excel_data = convert_df_to_excel(df_papers)
+                    
                     st.download_button(
-                        label="📥 Download Papers as Excel (.xlsx)",
+                        label="📥 Download Papers List as Excel (.xlsx)",
                         data=excel_data,
-                        file_name=f"papers_{paper_topic[:20].strip()}.xlsx",
+                        file_name=f"papers_{paper_topic[:15].strip()}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-
             except Exception as error:
                 st.error(f"Paper search failed: {error}")
 
 
 # ---------------------------------------------------------
-# TAB 3: Country-wise Professor / Researcher Finder
+# TAB 3: Country-wise Professor / Researcher Excel Export
 # ---------------------------------------------------------
 with tab3:
     st.header("Find Professors and Researchers by Topic & Country")
-    st.write("Search topic-related papers and filter researchers by country code (e.g., US, CA, DE, BD, AU, JP).")
-
-    professor_topic = st.text_input(
-        "Research topic",
-        placeholder="Example: Physics-informed machine learning for concrete structures",
-        key="professor_topic"
-    )
+    professor_topic = st.text_input("Research topic", placeholder="e.g., Physics-informed neural networks", key="prof_topic")
 
     ccol1, ccol2, ccol3 = st.columns(3)
     with ccol1:
-        researcher_year_from = st.number_input(
-            "Publication start year", min_value=1900, max_value=2100,
-            value=2018, key="researcher_from"
-        )
+        researcher_year_from = st.number_input("Publication start year", min_value=1900, max_value=2100, value=2018, key="res_from")
     with ccol2:
-        researcher_year_to = st.number_input(
-            "Publication end year", min_value=1900, max_value=2100,
-            value=2026, key="researcher_to"
-        )
+        researcher_year_to = st.number_input("Publication end year", min_value=1900, max_value=2100, value=2026, key="res_to")
     with ccol3:
-        country_filter = st.text_input(
-            "Country Code (Optional)",
-            placeholder="e.g., US, CA, DE, BD",
-            key="country_filter"
-        )
+        country_filter = st.text_input("Country Code (Optional)", placeholder="e.g., US, CA, DE, BD", key="country_filter")
 
-    researcher_limit = st.selectbox(
-        "Number of topic-related papers to inspect",
-        [25, 50, 100],
-        index=1,
-        key="researcher_limit"
-    )
+    researcher_limit = st.selectbox("Inspect papers limit", [25, 50, 100], index=1, key="res_limit")
 
     if st.button("Find Professors / Researchers", type="primary", key="find_professors"):
         if not professor_topic.strip():
             st.warning("Enter a research topic.")
-        elif researcher_year_from > researcher_year_to:
-            st.warning("The starting year must not be later than the ending year.")
         else:
             try:
-                with st.spinner("Searching topic-related papers and identifying their authors..."):
+                with st.spinner("Searching matching researchers..."):
                     researchers, total_works = find_researchers(
-                        professor_topic.strip(),
-                        int(researcher_year_from),
-                        int(researcher_year_to),
-                        int(researcher_limit),
-                        country_filter.strip()
+                        professor_topic.strip(), int(researcher_year_from), int(researcher_year_to), int(researcher_limit), country_filter.strip()
                     )
 
-                st.success(f"Identified {len(researchers)} researchers matching your criteria.")
+                st.success(f"Identified {len(researchers)} researchers.")
 
-                if not researchers:
-                    st.info("No researchers found. Try broadening your keywords or clearing the country filter.")
-                else:
+                if researchers:
                     excel_res_rows = []
                     for index, researcher in enumerate(researchers[:30], start=1):
                         excel_res_rows.append({
                             "Name": researcher["name"],
                             "Institutions": researcher["institutions"],
                             "Countries": researcher["countries"],
-                            "Matching Papers": researcher["works_found"],
-                            "Citations": researcher["citations_in_results"],
-                            "Profile ID": researcher["id"],
+                            "Matching Papers Count": researcher["works_found"],
+                            "Total Citations": researcher["citations_in_results"],
+                            "Profile URL": researcher["id"],
                             "ORCID": researcher.get("orcid", "N/A")
                         })
 
-                        with st.expander(
-                            f"{index}. {researcher['name']} "
-                            f"— {researcher['works_found']} matching paper(s) | {researcher['countries']}"
-                        ):
-                            st.write(f"**Institution(s):** {researcher['institutions']}")
-                            st.write(f"**Country/countries:** {researcher['countries']}")
-                            st.write(f"**Matching papers in this search:** {researcher['works_found']}")
-                            st.write(f"**Citations of these retrieved papers:** {researcher['citations_in_results']:,}")
-                            st.markdown(f"[Open researcher profile]({researcher['id']})")
-                            if researcher.get("orcid"):
-                                st.markdown(f"[ORCID profile]({researcher['orcid']})")
+                        with st.expander(f"{index}. {researcher['name']} — {researcher['institutions']} ({researcher['countries']})"):
+                            st.write(f"**Matching Papers:** {researcher['works_found']}")
+                            st.write(f"**Total Citations:** {researcher['citations_in_results']}")
+                            st.markdown(f"[Open Profile]({researcher['id']})")
 
-                            st.markdown("**Relevant papers found:**")
-                            for sample in researcher["sample_papers"]:
-                                paper_label = sample["title"]
-                                if sample["year"]:
-                                    paper_label += f" ({sample['year']})"
-                                if sample["url"]:
-                                    st.markdown(f"- [{paper_label}]({sample['url']})")
-                                else:
-                                    st.markdown(f"- {paper_label}")
-
+                    # Generate Professor Excel Download
                     df_researchers = pd.DataFrame(excel_res_rows)
                     excel_res_data = convert_df_to_excel(df_researchers)
+                    
                     st.download_button(
-                        label="📥 Download Researchers as Excel (.xlsx)",
+                        label="📥 Download Professor List as Excel (.xlsx)",
                         data=excel_res_data,
-                        file_name=f"researchers_{professor_topic[:20].strip()}.xlsx",
+                        file_name=f"professors_{professor_topic[:15].strip()}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-
             except Exception as error:
                 st.error(f"Researcher search failed: {error}")
 
@@ -647,117 +551,34 @@ with tab3:
 # ---------------------------------------------------------
 with tab4:
     st.header("Gemini Research Assistant")
-
-    assistant_topic = st.text_input(
-        "Your research area (optional)",
-        placeholder="Example: Sustainable concrete using rice husk ash",
-        key="ast_topic"
-    )
-
-    assistant_question = st.text_area(
-        "Ask your research question",
-        placeholder="Example: Suggest research objectives for predicting concrete compressive strength using machine learning.",
-        height=150,
-        key="ast_q"
-    )
-
-    assistant_style = st.selectbox(
-        "Answer style",
-        [
-            "Detailed academic explanation",
-            "Simple explanation for learning",
-            "Literature review guidance",
-            "Research methodology guidance",
-            "Research proposal structure"
-        ],
-        key="ast_style"
-    )
+    assistant_question = st.text_area("Ask your research question", height=150, key="ast_q")
 
     if st.button("Ask Gemini", type="primary", key="general_gemini"):
-        if not assistant_question.strip():
-            st.warning("Write a question first.")
-        else:
-            prompt = f"""
-You are an academic research assistant for a Civil Engineering student.
-
-Research area: {assistant_topic or "Civil Engineering"}
-Preferred answer style: {assistant_style}
-
-User question:
-{assistant_question}
-
-Instructions:
-- Be accurate, clear, and academically useful.
-- Structure the answer with headings and bullet points where appropriate.
-- Do not invent references, DOIs, authors, or experimental data.
-- If suggesting papers, explain that the user must verify them in a scholarly database.
-- Distinguish established knowledge from suggestions or hypotheses.
-"""
+        if assistant_question.strip():
             with st.spinner("Gemini is preparing your answer..."):
-                answer = ask_gemini(prompt)
-            st.markdown(answer)
+                res = ask_gemini(assistant_question)
+                st.markdown(res)
+                st.download_button("📥 Download Answer (.txt)", data=res, file_name="ai_response.txt")
 
 
 # ---------------------------------------------------------
 # TAB 5: Application & Proposal Generator
 # ---------------------------------------------------------
 with tab5:
-    st.header("Academic Document & Application Generator")
-    st.write("Generate professional Cover Letters, Recommendation Letters, Research Interests, and Research Proposals using Gemini.")
+    st.header("Academic Document Generator")
+    doc_type = st.selectbox("Select Document Type", ["Cover Letter / Email to Professor", "Research Proposal Outline"])
+    details = st.text_area("Provide background/topic details:")
 
-    doc_type = st.selectbox(
-        "Select Document Type",
-        [
-            "Cover Letter / Email to Professor",
-            "Recommendation Letter Draft",
-            "Research Interest Statement / SOP",
-            "Research Proposal Outline"
-        ]
-    )
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        applicant_name = st.text_input("Your Full Name", value="Md. Jubayer Hossain Mahin")
-        applicant_field = st.text_input("Your Field / Major", value="Civil Engineering")
-    with col_b:
-        target_prof_uni = st.text_input("Target Professor / University Name", placeholder="e.g. Prof. John Doe, University of Waterloo")
-        specific_topic = st.text_input("Specific Research Topic / Focus", placeholder="e.g. Sustainable Concrete & ML")
-
-    user_background = st.text_area(
-        "Provide your background, achievements, or project details to include",
-        placeholder="Mention your CGPA, software skills (ETABS, Python), thesis topic, or key achievements..."
-    )
-
-    if st.button("Generate Document with Gemini", type="primary", key="gen_doc"):
-        if not target_prof_uni.strip() and "Cover Letter" in doc_type:
-            st.warning("Please enter the target Professor/University name.")
-        else:
-            prompt = f"""
-You are an expert academic mentor and writer. Please write a highly professional, polite, and persuasive academic document based on the following details:
-
-Document Type: {doc_type}
-Applicant Name: {applicant_name}
-Applicant Field: {applicant_field}
-Target Professor / University: {target_prof_uni}
-Research Focus / Topic: {specific_topic}
-Applicant Background & Details: {user_background}
-
-Instructions:
-- Use formal academic tone.
-- Make it structured, clean, and ready to use.
-- Use placeholders like [Date], [University Name] if any vital detail is missing.
-- Do not fabricate false publication records, but format placeholders properly for the user to fill in.
-"""
+    if st.button("Generate Document", type="primary", key="gen_doc"):
+        if details.strip():
             with st.spinner("Generating document..."):
-                doc_result = ask_gemini(prompt)
-            st.markdown(doc_result)
+                doc_res = ask_gemini(f"Draft a {doc_type} based on: {details}")
+                st.markdown(doc_res)
+                st.download_button("📥 Download Document (.txt)", data=doc_res, file_name="generated_document.txt")
 
 
 # ---------------------------------------------------------
 # Footer
 # ---------------------------------------------------------
 st.divider()
-st.caption(
-    "Thesis AI Agent prototype | Gemini for AI analysis | OpenAlex for "
-    "academic discovery | Verify all sources before citing them in a thesis."
-)
+st.caption("Thesis AI Agent | Powered by Streamlit & Gemini 3.8 Flash")
