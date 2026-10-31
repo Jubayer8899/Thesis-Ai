@@ -1,6 +1,7 @@
 import os
 import requests
 import streamlit as st
+import re
 import fitz  # PyMuPDF for fast text extraction
 import pandas as pd
 from io import BytesIO
