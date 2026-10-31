@@ -9,13 +9,18 @@ from google import genai
 from collections import defaultdict
 
 # ---------------------------------------------------------
-# Configuration
+# Configuration & Environment Variables
 # ---------------------------------------------------------
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
-OPENALEX_API_KEY = os.getenv("OPENALEX_API_KEY", "").strip()
+# Streamlit secrets or .env configurations
+DEFAULT_GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", "")).strip()
+GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-2.5-flash")).strip()
+OPENALEX_API_KEY = st.secrets.get("OPENALEX_API_KEY", os.getenv("OPENALEX_API_KEY", "")).strip()
+
+# Password Configuration (Secrets/Env support)
+APP_PASSWORD = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", "coder123"))          # General Users
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", os.getenv("ADMIN_PASSWORD", "myadmin789"))  # Admin User (You)
 
 OPENALEX_BASE_URL = "https://api.openalex.org"
 REQUEST_TIMEOUT = 30
@@ -26,25 +31,86 @@ st.set_page_config(
     layout="wide"
 )
 
+# ---------------------------------------------------------
+# 🔒 TWO-TIER AUTHENTICATION (ADMIN vs GENERAL USER)
+# ---------------------------------------------------------
+def check_password():
+    """Manages login authentication for Admin and General users."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+        st.session_state.is_admin = False
+
+    if not st.session_state.authenticated:
+        st.title("🔒 Thesis AI Agent - Login Required")
+        user_input = st.text_input("Enter Passcode to Access:", type="password")
+        if st.button("Login"):
+            if user_input == ADMIN_PASSWORD:
+                st.session_state.authenticated = True
+                st.session_state.is_admin = True   # Logged in as Admin
+                st.rerun()
+            elif user_input == APP_PASSWORD:
+                st.session_state.authenticated = True
+                st.session_state.is_admin = False  # Logged in as General User
+                st.rerun()
+            else:
+                st.error("Incorrect Passcode! Access Denied.")
+        return False
+    return True
+
+if not check_password():
+    st.stop()  # Stop app execution if not authenticated
+
 
 # ---------------------------------------------------------
-# Gemini AI
+# 🔑 DYNAMIC API KEY & SIDEBAR CONFIGURATION
+# ---------------------------------------------------------
+with st.sidebar:
+    st.header("🔑 API Configuration")
+    
+    if st.session_state.is_admin:
+        # Admin Mode: Uses secret key automatically
+        ACTIVE_GEMINI_KEY = DEFAULT_GEMINI_KEY
+        st.success("👑 Admin Mode Active: Secret API Key Auto-Loaded!")
+        if not ACTIVE_GEMINI_KEY:
+            st.warning("⚠️ Admin Warning: Default GEMINI_API_KEY is not set in secrets/env.")
+    else:
+        # General User Mode: Mandatory custom API key input
+        user_api_key_input = st.text_input(
+            "Enter your Gemini API Key", 
+            type="password",
+            placeholder="AIzaSy...",
+            help="Apnar personal Gemini API key use korle apnar billing/quota burn hobe."
+        )
+        
+        if user_api_key_input.strip():
+            ACTIVE_GEMINI_KEY = user_api_key_input.strip()
+            st.success("🟢 Custom API key connected!")
+        else:
+            ACTIVE_GEMINI_KEY = None
+            st.warning("⚠️ Please enter your Gemini API key to unlock features.")
+
+# Block execution if no valid API key is present
+if not ACTIVE_GEMINI_KEY:
+    st.warning("🔒 Access Blocked: Gemini API Key is required to use this application.")
+    st.stop()
+
+
+# ---------------------------------------------------------
+# Gemini AI Engine (Uses ACTIVE_GEMINI_KEY)
 # ---------------------------------------------------------
 def get_gemini_client():
-    if not GEMINI_API_KEY:
+    """Initializes Google GenAI Client with active dynamic API key."""
+    if not ACTIVE_GEMINI_KEY:
         return None
-    return genai.Client(api_key=GEMINI_API_KEY)
+    return genai.Client(api_key=ACTIVE_GEMINI_KEY)
 
 
 def ask_gemini(prompt: str) -> str:
-    """Send a prompt to Gemini and return its text response."""
+    """Send a prompt to Gemini and return text response."""
     client = get_gemini_client()
 
     if client is None:
-        return (
-            "Gemini API key is missing. Add GEMINI_API_KEY to your .env file, "
-            "then restart the Streamlit app."
-        )
+        return "Gemini API key is missing. Please provide a valid API key in the sidebar."
 
     try:
         response = client.models.generate_content(
@@ -57,17 +123,13 @@ def ask_gemini(prompt: str) -> str:
 
 
 # ---------------------------------------------------------
-# OpenAlex academic database
+# OpenAlex Academic Database API
 # ---------------------------------------------------------
 def openalex_get(endpoint: str, params: dict) -> dict:
-    """Request data from OpenAlex. An API key is required for normal use."""
-    if not OPENALEX_API_KEY:
-        raise ValueError(
-            "OpenAlex API key is missing. Add OPENALEX_API_KEY to your .env file."
-        )
-
+    """Request data from OpenAlex API."""
     request_params = dict(params)
-    request_params["api_key"] = OPENALEX_API_KEY
+    if OPENALEX_API_KEY:
+        request_params["api_key"] = OPENALEX_API_KEY
 
     response = requests.get(
         f"{OPENALEX_BASE_URL}/{endpoint}",
@@ -76,9 +138,7 @@ def openalex_get(endpoint: str, params: dict) -> dict:
     )
 
     if response.status_code == 429:
-        raise RuntimeError(
-            "OpenAlex rate/budget limit reached. Please wait or check your API usage."
-        )
+        raise RuntimeError("OpenAlex rate/budget limit reached. Please wait or check usage.")
 
     response.raise_for_status()
     return response.json()
@@ -99,6 +159,7 @@ def reconstruct_abstract(inverted_index):
 
 
 def get_author_names(work):
+    """Helper to join author names from paper object."""
     names = []
     for authorship in work.get("authorships", []) or []:
         author = authorship.get("author") or {}
@@ -110,6 +171,7 @@ def get_author_names(work):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_papers(topic: str, year_from: int, year_to: int, limit: int):
+    """Search papers via OpenAlex."""
     params = {
         "search": topic,
         "per_page": limit,
@@ -125,10 +187,7 @@ def search_papers(topic: str, year_from: int, year_to: int, limit: int):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def find_researchers(topic: str, year_from: int, year_to: int, limit: int, country_code: str = ""):
-    """
-    Find researchers by searching relevant papers, then aggregate the authors
-    appearing on those papers, with optional country filter.
-    """
+    """Aggregate researcher profiles by topic & optional country code."""
     params = {
         "search": topic,
         "per_page": limit,
@@ -165,13 +224,11 @@ def find_researchers(topic: str, year_from: int, year_to: int, limit: int, count
 
             institutions = authorship.get("institutions", []) or []
             
-            # If country filter is applied, check if any institution matches the country code
             if country_code and country_code.strip():
-                match_country = False
-                for inst in institutions:
-                    if inst.get("country_code", "").upper() == country_code.strip().upper():
-                        match_country = True
-                        break
+                match_country = any(
+                    inst.get("country_code", "").upper() == country_code.strip().upper()
+                    for inst in institutions
+                )
                 if not match_country:
                     continue
 
@@ -192,10 +249,10 @@ def find_researchers(topic: str, year_from: int, year_to: int, limit: int, count
             researcher["citations_in_results"] += work.get("cited_by_count") or 0
 
             for institution in institutions:
-                institution_name = institution.get("display_name")
+                inst_name = institution.get("display_name")
                 country = institution.get("country_code")
-                if institution_name:
-                    researcher["institutions"].add(institution_name)
+                if inst_name:
+                    researcher["institutions"].add(inst_name)
                 if country:
                     researcher["countries"].add(country)
 
@@ -208,29 +265,22 @@ def find_researchers(topic: str, year_from: int, year_to: int, limit: int, count
 
     researchers = list(researcher_map.values())
     researchers.sort(
-        key=lambda item: (
-            item["works_found"],
-            item["citations_in_results"]
-        ),
+        key=lambda item: (item["works_found"], item["citations_in_results"]),
         reverse=True
     )
 
     for researcher in researchers:
-        researcher["institutions"] = ", ".join(
-            sorted(researcher["institutions"])
-        ) or "Affiliation not listed"
-        researcher["countries"] = ", ".join(
-            sorted(researcher["countries"])
-        ) or "Not listed"
+        researcher["institutions"] = ", ".join(sorted(researcher["institutions"])) or "Affiliation not listed"
+        researcher["countries"] = ", ".join(sorted(researcher["countries"])) or "Not listed"
 
     return researchers, data.get("meta", {}).get("count", 0)
 
 
 # ---------------------------------------------------------
-# PDF processing
+# PDF Processing (PyMuPDF)
 # ---------------------------------------------------------
 def extract_pdf_text(uploaded_file):
-    """Extract text from a PDF uploaded in Streamlit."""
+    """Extract text from uploaded PDF using PyMuPDF."""
     try:
         pdf_document = fitz.open(
             stream=uploaded_file.getvalue(),
@@ -247,10 +297,7 @@ def extract_pdf_text(uploaded_file):
 
         extracted_text = "\n".join(page_texts).strip()
         if not extracted_text:
-            return (
-                "No selectable text was found. This may be a scanned PDF; "
-                "OCR will be needed."
-            )
+            return "No selectable text was found. This may be a scanned PDF; OCR will be needed."
 
         return extracted_text
 
@@ -259,6 +306,7 @@ def extract_pdf_text(uploaded_file):
 
 
 def build_paper_prompt(task: str, paper_text: str) -> str:
+    """Build formatted prompt for paper analysis."""
     return f"""
 You are an academic research assistant specializing in Civil Engineering.
 
@@ -277,8 +325,8 @@ PAPER TEXT:
 """
 
 
-# Helper for Excel export
 def convert_df_to_excel(df):
+    """Helper to convert Pandas DataFrame to Excel downloadable stream."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Sheet1')
@@ -286,7 +334,7 @@ def convert_df_to_excel(df):
 
 
 # ---------------------------------------------------------
-# Application interface
+# Application Interface & Sidebar System Info
 # ---------------------------------------------------------
 st.title("📚 Thesis AI Agent")
 st.caption(
@@ -295,18 +343,19 @@ st.caption(
 )
 
 with st.sidebar:
+    st.divider()
     st.header("⚙️ Configuration")
-    st.write(f"**Gemini model:** `{GEMINI_MODEL}`")
+    st.write(f"**Gemini Model:** `{GEMINI_MODEL}`")
     st.write(
-        "**Gemini API:** " +
-        ("🟢 API key detected" if GEMINI_API_KEY else "🔴 API key missing")
+        "**Gemini Connection:** " +
+        ("🟢 Active" if ACTIVE_GEMINI_KEY else "🔴 Missing Key")
     )
     st.write(
         "**OpenAlex API:** " +
-        ("🟢 API key detected" if OPENALEX_API_KEY else "🔴 API key missing")
+        ("🟢 API Key Detected" if OPENALEX_API_KEY else "⚪ Public Mode (Limited Rate)")
     )
     st.divider()
-    st.markdown("**Research workflow**")
+    st.markdown("**Research Workflow**")
     st.markdown(
         "1. Search your research topic.\n"
         "2. Review papers & find gaps.\n"
@@ -316,7 +365,7 @@ with st.sidebar:
     )
     st.caption(
         "Always verify paper details, author roles, affiliations, "
-        "and research claims from the original sources."
+        "and research claims from original sources."
     )
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -397,15 +446,11 @@ with tab1:
 # ---------------------------------------------------------
 with tab2:
     st.header("Topic-wise Academic Paper Search & Data Export")
-    st.write(
-        "Search research publications by topic using OpenAlex and export to Excel."
-    )
+    st.write("Search research publications by topic using OpenAlex and export to Excel.")
 
     paper_topic = st.text_input(
         "Research topic",
-        placeholder=(
-            "Example: Machine learning prediction of concrete compressive strength"
-        ),
+        placeholder="Example: Machine learning prediction of concrete compressive strength",
         key="paper_topic"
     )
 
@@ -449,7 +494,6 @@ with tab2:
                 if not papers:
                     st.info("No papers found. Try broader or different keywords.")
                 else:
-                    # Prepare dataframe for Excel download
                     excel_rows = []
                     for index, paper in enumerate(papers, start=1):
                         title = paper.get("title") or "Title unavailable"
@@ -497,30 +541,24 @@ with tab2:
 # ---------------------------------------------------------
 with tab3:
     st.header("Find Professors and Researchers by Topic & Country")
-    st.write(
-        "Search topic-related papers and filter researchers by country code (e.g., US, CA, DE, BD, AU, JP)."
-    )
+    st.write("Search topic-related papers and filter researchers by country code (e.g., US, CA, DE, BD, AU, JP).")
 
     professor_topic = st.text_input(
         "Research topic",
-        placeholder=(
-            "Example: Physics-informed machine learning for concrete structures"
-        ),
+        placeholder="Example: Physics-informed machine learning for concrete structures",
         key="professor_topic"
     )
 
     ccol1, ccol2, ccol3 = st.columns(3)
     with ccol1:
         researcher_year_from = st.number_input(
-            "Publication start year",
-            min_value=1900, max_value=2100, value=2018,
-            key="researcher_from"
+            "Publication start year", min_value=1900, max_value=2100,
+            value=2018, key="researcher_from"
         )
     with ccol2:
         researcher_year_to = st.number_input(
-            "Publication end year",
-            min_value=1900, max_value=2100, value=2026,
-            key="researcher_to"
+            "Publication end year", min_value=1900, max_value=2100,
+            value=2026, key="researcher_to"
         )
     with ccol3:
         country_filter = st.text_input(
@@ -543,9 +581,7 @@ with tab3:
             st.warning("The starting year must not be later than the ending year.")
         else:
             try:
-                with st.spinner(
-                    "Searching topic-related papers and identifying their authors..."
-                ):
+                with st.spinner("Searching topic-related papers and identifying their authors..."):
                     researchers, total_works = find_researchers(
                         professor_topic.strip(),
                         int(researcher_year_from),
@@ -554,9 +590,7 @@ with tab3:
                         country_filter.strip()
                     )
 
-                st.success(
-                    f"Identified {len(researchers)} researchers matching your criteria."
-                )
+                st.success(f"Identified {len(researchers)} researchers matching your criteria.")
 
                 if not researchers:
                     st.info("No researchers found. Try broadening your keywords or clearing the country filter.")
@@ -579,21 +613,11 @@ with tab3:
                         ):
                             st.write(f"**Institution(s):** {researcher['institutions']}")
                             st.write(f"**Country/countries:** {researcher['countries']}")
-                            st.write(
-                                f"**Matching papers in this search:** "
-                                f"{researcher['works_found']}"
-                            )
-                            st.write(
-                                f"**Citations of these retrieved papers:** "
-                                f"{researcher['citations_in_results']:,}"
-                            )
-                            st.markdown(
-                                f"[Open researcher profile]({researcher['id']})"
-                            )
+                            st.write(f"**Matching papers in this search:** {researcher['works_found']}")
+                            st.write(f"**Citations of these retrieved papers:** {researcher['citations_in_results']:,}")
+                            st.markdown(f"[Open researcher profile]({researcher['id']})")
                             if researcher.get("orcid"):
-                                st.markdown(
-                                    f"[ORCID profile]({researcher['orcid']})"
-                                )
+                                st.markdown(f"[ORCID profile]({researcher['orcid']})")
 
                             st.markdown("**Relevant papers found:**")
                             for sample in researcher["sample_papers"]:
@@ -632,10 +656,7 @@ with tab4:
 
     assistant_question = st.text_area(
         "Ask your research question",
-        placeholder=(
-            "Example: Suggest research objectives for predicting concrete "
-            "compressive strength using machine learning."
-        ),
+        placeholder="Example: Suggest research objectives for predicting concrete compressive strength using machine learning.",
         height=150,
         key="ast_q"
     )
@@ -682,9 +703,7 @@ Instructions:
 # ---------------------------------------------------------
 with tab5:
     st.header("Academic Document & Application Generator")
-    st.write(
-        "Generate professional Cover Letters, Recommendation Letters, Research Interests, and Research Proposals using Gemini."
-    )
+    st.write("Generate professional Cover Letters, Recommendation Letters, Research Interests, and Research Proposals using Gemini.")
 
     doc_type = st.selectbox(
         "Select Document Type",
