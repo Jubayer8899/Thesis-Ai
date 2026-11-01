@@ -523,8 +523,8 @@ with tab2:
 # TAB 3: Professor Finder (With University, Research Interest & Profile URL)
 # ---------------------------------------------------------
 with tab3:
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def find_researchers(topic: str, year_from: int, year_to: int, limit: int, country_code: str = ""):
+@st.cache_data(ttl=3600, show_spinner=False)
+def find_researchers(topic: str, year_from: int, year_to: int, limit: int, country_code: str = ""):
     params = {"search": topic, "per_page": limit, "sort": "relevance_score:desc"}
     filters = []
     
