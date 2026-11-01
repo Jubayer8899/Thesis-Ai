@@ -523,6 +523,83 @@ with tab2:
 # TAB 3: Professor Finder (With University, Research Interest & Profile URL)
 # ---------------------------------------------------------
 with tab3:
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def find_researchers(topic: str, year_from: int, year_to: int, limit: int, country_code: str = ""):
+    params = {"search": topic, "per_page": limit, "sort": "relevance_score:desc"}
+    filters = []
+    
+    if year_from and year_to:
+        filters.append(f"publication_year:{year_from}-{year_to}")
+        
+    # Strict Country Code Filter Integration
+    if country_code and country_code.strip():
+        filters.append(f"institutions.country_code:{country_code.strip().upper()}")
+        
+    if filters:
+        params["filter"] = ",".join(filters)
+
+    data = openalex_get("works", params)
+    works = data.get("results", [])
+    researcher_map = {}
+
+    for work in works:
+        work_title = work.get("title") or "Untitled work"
+        work_year = work.get("publication_year")
+        work_doi = work.get("doi")
+        work_url = work_doi or work.get("id") or ""
+
+        for authorship in work.get("authorships", []) or []:
+            author = authorship.get("author") or {}
+            author_id = author.get("id")
+            author_name = author.get("display_name")
+            if not author_id or not author_name:
+                continue
+                
+            institutions = authorship.get("institutions", []) or []
+            
+            # Double check country match
+            if country_code and country_code.strip():
+                match_country = any(
+                    inst.get("country_code", "").upper() == country_code.strip().upper()
+                    for inst in institutions
+                )
+                if not match_country:
+                    continue
+
+            if author_id not in researcher_map:
+                researcher_map[author_id] = {
+                    "name": author_name, 
+                    "id": author_id, 
+                    "works_found": 0,
+                    "citations_in_results": 0, 
+                    "institutions": set(),
+                    "countries": set(), 
+                    "sample_papers": [], 
+                    "orcid": author.get("orcid")
+                }
+
+            researcher = researcher_map[author_id]
+            researcher["works_found"] += 1
+            researcher["citations_in_results"] += work.get("cited_by_count") or 0
+
+            for institution in institutions:
+                inst_name = institution.get("display_name")
+                country = institution.get("country_code")
+                if inst_name: researcher["institutions"].add(inst_name)
+                if country: researcher["countries"].add(country)
+
+            if len(researcher["sample_papers"]) < 5:
+                researcher["sample_papers"].append({"title": work_title, "year": work_year, "url": work_url})
+
+    researchers = list(researcher_map.values())
+    researchers.sort(key=lambda item: (item["works_found"], item["citations_in_results"]), reverse=True)
+
+    for researcher in researchers:
+        researcher["institutions"] = ", ".join(sorted(researcher["institutions"])) or "Affiliation not listed"
+        researcher["countries"] = ", ".join(sorted(researcher["countries"])) or "Not listed"
+
+    return researchers, data.get("meta", {}).get("count", 0)
+
     st.header("Find Professors and Researchers by Topic & Country")
     st.write("Find leading researchers, their institutions, countries, profile links, and research sample papers.")
     
