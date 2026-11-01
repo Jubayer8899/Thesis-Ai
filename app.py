@@ -522,7 +522,6 @@ with tab2:
 # ---------------------------------------------------------
 # TAB 3: Professor Finder (With University, Research Interest & Profile URL)
 # ---------------------------------------------------------
-with tab3:
 @st.cache_data(ttl=3600, show_spinner=False)
 def find_researchers(topic: str, year_from: int, year_to: int, limit: int, country_code: str = ""):
     params = {"search": topic, "per_page": limit, "sort": "relevance_score:desc"}
@@ -599,7 +598,7 @@ def find_researchers(topic: str, year_from: int, year_to: int, limit: int, count
         researcher["countries"] = ", ".join(sorted(researcher["countries"])) or "Not listed"
 
     return researchers, data.get("meta", {}).get("count", 0)
-
+with tab3:
     st.header("Find Professors and Researchers by Topic & Country")
     st.write("Find leading researchers, their institutions, countries, profile links, and research sample papers.")
     
